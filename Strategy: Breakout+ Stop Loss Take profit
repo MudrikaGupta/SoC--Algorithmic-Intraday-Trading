@@ -1,0 +1,72 @@
+import pandas as pd
+import numpy as np
+
+df = pd.read_csv("nifty50.csv")
+df["Date"] = pd.to_datetime(df["Date"])
+
+for col in ["Price", "High", "Low"]:
+    df[col] = (
+        df[col]
+        .astype(str)
+        .str.replace(",", "", regex=False)
+        .astype(float)
+    )
+
+df["HH20"] = df["High"].rolling(20).max().shift(1)
+df["LL20"] = df["Low"].rolling(20).min().shift(1)
+
+positions = []
+
+current_pos = 0
+entry_price = None
+
+for i in range(len(df)):
+
+    price = df["Price"].iloc[i]
+
+    if np.isnan(df["HH20"].iloc[i]):
+        positions.append(0)
+        continue
+
+    if current_pos == 1:
+
+        if (
+            price <= entry_price * 0.97
+            or price >= entry_price * 1.06
+        ):
+            current_pos = 0
+            entry_price = None
+
+    elif current_pos == -1:
+
+        if (
+            price >= entry_price * 1.03
+            or price <= entry_price * 0.94
+        ):
+            current_pos = 0
+            entry_price = None
+
+
+    if price > df["HH20"].iloc[i]:
+
+        current_pos = 1
+        entry_price = price
+
+    elif price < df["LL20"].iloc[i]:
+
+        current_pos = -1
+        entry_price = price
+
+    positions.append(current_pos)
+
+result = pd.DataFrame({
+    "Date": df["Date"],
+    "Position": positions
+})
+
+result.to_csv(
+    "breakout_sl_tp_signal.csv",
+    index=False
+)
+
+print(result.head())
