@@ -1,72 +1,116 @@
 import pandas as pd
 import numpy as np
 
+# =========================
+# Load Data
+# =========================
+
 df = pd.read_csv("nifty50.csv")
+
 df["Date"] = pd.to_datetime(df["Date"])
 
-for col in ["Price", "High", "Low"]:
-    df[col] = (
-        df[col]
-        .astype(str)
-        .str.replace(",", "", regex=False)
-        .astype(float)
-    )
+# Clean Price column
+df["Price"] = (
+    df["Price"]
+    .astype(str)
+    .str.replace(",", "", regex=False)
+    .astype(float)
+)
 
-df["HH20"] = df["High"].rolling(20).max().shift(1)
-df["LL20"] = df["Low"].rolling(20).min().shift(1)
+close = df["Price"]
 
-positions = []
+# =========================
+# Bollinger Bands (20,2)
+# =========================
 
-current_pos = 0
+ma20 = close.rolling(window=20).mean()
+std20 = close.rolling(window=20).std()
+
+df["UpperBB"] = ma20 + 2 * std20
+df["LowerBB"] = ma20 - 2 * std20
+
+# =========================
+# RSI (14)
+# =========================
+
+delta = close.diff()
+
+gain = delta.where(delta > 0, 0)
+loss = -delta.where(delta < 0, 0)
+
+avg_gain = gain.rolling(14).mean()
+avg_loss = loss.rolling(14).mean()
+
+rs = avg_gain / avg_loss
+
+df["RSI"] = 100 - (100 / (1 + rs))
+
+
+holding = 0          # 0 = no position, 1 = holding one lot
 entry_price = None
+
+signals = []
 
 for i in range(len(df)):
 
-    price = df["Price"].iloc[i]
+    signal = 0
 
-    if np.isnan(df["HH20"].iloc[i]):
-        positions.append(0)
+    if (
+        np.isnan(df["RSI"].iloc[i]) or
+        np.isnan(df["UpperBB"].iloc[i])
+    ):
+        signals.append(0)
         continue
 
-    if current_pos == 1:
+    price = df["Price"].iloc[i]
+    rsi = df["RSI"].iloc[i]
+    upper_bb = df["UpperBB"].iloc[i]
+    lower_bb = df["LowerBB"].iloc[i]
+
+
+    if holding == 0:
 
         if (
-            price <= entry_price * 0.97
-            or price >= entry_price * 1.06
+            price < lower_bb and
+            rsi < 30
         ):
-            current_pos = 0
-            entry_price = None
+            signal = 1
+            holding = 1
+            entry_price = price
 
-    elif current_pos == -1:
+
+    elif holding == 1:
+
+        take_profit = price >= entry_price * 1.05
+        stop_loss = price <= entry_price * 0.97
+
+        indicator_exit = (
+            price > upper_bb and
+            rsi > 70
+        )
 
         if (
-            price >= entry_price * 1.03
-            or price <= entry_price * 0.94
+            take_profit or
+            stop_loss or
+            indicator_exit
         ):
-            current_pos = 0
+            signal = -1
+            holding = 0
             entry_price = None
 
+    signals.append(signal)
 
-    if price > df["HH20"].iloc[i]:
 
-        current_pos = 1
-        entry_price = price
-
-    elif price < df["LL20"].iloc[i]:
-
-        current_pos = -1
-        entry_price = price
-
-    positions.append(current_pos)
 
 result = pd.DataFrame({
     "Date": df["Date"],
-    "Position": positions
+    "Signal": signals
 })
 
 result.to_csv(
-    "breakout_sl_tp_signal.csv",
+    "bollinger_rsi_trades.csv",
     index=False
 )
 
 print(result.head())
+print("\nSaved as bollinger_rsi_trades.csv")
