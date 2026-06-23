@@ -15,19 +15,11 @@ df["Price"] = (
 
 close = df["Price"]
 
-# =========================
-# Bollinger Bands (20,2)
-# =========================
-
 ma20 = close.rolling(window=20).mean()
 std20 = close.rolling(window=20).std()
 
 df["UpperBB"] = ma20 + 2 * std20
 df["LowerBB"] = ma20 - 2 * std20
-
-# =========================
-# RSI (14)
-# =========================
 
 delta = close.diff()
 
