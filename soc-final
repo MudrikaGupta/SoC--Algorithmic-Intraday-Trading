@@ -1,0 +1,278 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# =====================================================
+# LOAD DATA
+# =====================================================
+
+df = pd.read_csv("Nifty 50 Historical Data.csv")
+
+df["Date"] = pd.to_datetime(df["Date"], format="%d-%m-%Y")
+
+df["Price"] = (
+    df["Price"]
+    .astype(str)
+    .str.replace(",", "", regex=False)
+    .astype(float)
+)
+
+# If High/Low are present, clean them
+if "High" in df.columns:
+    df["High"] = (
+        df["High"]
+        .astype(str)
+        .str.replace(",", "", regex=False)
+        .astype(float)
+    )
+
+if "Low" in df.columns:
+    df["Low"] = (
+        df["Low"]
+        .astype(str)
+        .str.replace(",", "", regex=False)
+        .astype(float)
+    )
+
+df = df.sort_values("Date").reset_index(drop=True)
+
+close = df["Price"]
+
+# =====================================================
+# MOVING AVERAGES
+# =====================================================
+
+df["SMA50"] = close.rolling(50).mean()
+df["SMA200"] = close.rolling(200).mean()
+
+# =====================================================
+# MACD
+# =====================================================
+
+ema12 = close.ewm(span=12, adjust=False).mean()
+ema26 = close.ewm(span=26, adjust=False).mean()
+
+df["MACD"] = ema12 - ema26
+df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+
+# =====================================================
+# ATR
+# =====================================================
+
+# If your CSV doesn't contain High/Low, approximate ATR
+if "High" not in df.columns or "Low" not in df.columns:
+
+    df["High"] = close
+    df["Low"] = close
+
+high_low = df["High"] - df["Low"]
+
+high_close = abs(df["High"] - close.shift())
+
+low_close = abs(df["Low"] - close.shift())
+
+true_range = pd.concat(
+    [high_low, high_close, low_close],
+    axis=1
+).max(axis=1)
+
+df["ATR"] = true_range.rolling(14).mean()
+
+# =====================================================
+# STRATEGY
+# =====================================================
+
+position = 0
+
+entry_price = 0
+
+stop_loss = 0
+
+positions = []
+
+for i in range(len(df)):
+
+    if i < 200:
+
+        positions.append(0)
+
+        continue
+
+    trend = df.loc[i, "SMA50"] > df.loc[i, "SMA200"]
+
+    macd_buy = (
+        df.loc[i-1, "MACD"] <= df.loc[i-1, "Signal"]
+        and
+        df.loc[i, "MACD"] > df.loc[i, "Signal"]
+    )
+
+    macd_sell = (
+        df.loc[i-1, "MACD"] >= df.loc[i-1, "Signal"]
+        and
+        df.loc[i, "MACD"] < df.loc[i, "Signal"]
+    )
+
+    price = df.loc[i, "Price"]
+
+    atr = df.loc[i, "ATR"]
+
+    if position == 0:
+
+        if trend and macd_buy:
+
+            position = 1
+
+            entry_price = price
+
+            stop_loss = entry_price - 2 * atr
+
+    else:
+
+        stop_loss = max(stop_loss, price - 2 * atr)
+
+        if macd_sell or price < stop_loss:
+
+            position = 0
+
+    positions.append(position)
+
+df["Position"] = positions
+
+# =====================================================
+# RETURNS
+# =====================================================
+
+df["Market Return"] = close.pct_change()
+
+df["Strategy Return"] = (
+    df["Market Return"] *
+    df["Position"].shift(1)
+)
+
+df["Strategy Return"] = df["Strategy Return"].fillna(0)
+
+# =====================================================
+# EQUITY CURVE
+# =====================================================
+
+initial_capital = 100000
+
+df["Strategy Equity"] = (
+    1 + df["Strategy Return"]
+).cumprod() * initial_capital
+
+df["BuyHold Equity"] = (
+    1 + df["Market Return"].fillna(0)
+).cumprod() * initial_capital
+
+# =====================================================
+# METRICS
+# =====================================================
+
+strategy_returns = df["Strategy Return"]
+
+strategy_return = (
+    df["Strategy Equity"].iloc[-1] /
+    initial_capital - 1
+) * 100
+
+buyhold_return = (
+    df["BuyHold Equity"].iloc[-1] /
+    initial_capital - 1
+) * 100
+
+years = (
+    (df["Date"].iloc[-1] -
+     df["Date"].iloc[0]).days
+) / 365.25
+
+cagr = (
+    (df["Strategy Equity"].iloc[-1] /
+     initial_capital)
+    ** (1 / years) - 1
+) * 100
+
+volatility = (
+    strategy_returns.std() *
+    np.sqrt(252)
+) * 100
+
+sharpe = (
+    strategy_returns.mean() /
+    strategy_returns.std()
+) * np.sqrt(252)
+
+rolling_max = df["Strategy Equity"].cummax()
+
+drawdown = (
+    df["Strategy Equity"] -
+    rolling_max
+) / rolling_max
+
+max_drawdown = drawdown.min() * 100
+
+trade_changes = df["Position"].diff()
+
+buy_signals = (trade_changes == 1).sum()
+
+sell_signals = (trade_changes == -1).sum()
+
+# =====================================================
+# RESULTS
+# =====================================================
+
+print("=" * 60)
+print("Trend Filter + MACD + ATR Strategy")
+print("=" * 60)
+
+print(f"Initial Capital      : ₹{initial_capital:,.2f}")
+print(f"Final Portfolio      : ₹{df['Strategy Equity'].iloc[-1]:,.2f}")
+
+print("-" * 60)
+
+print(f"Strategy Return      : {strategy_return:.2f}%")
+print(f"Buy & Hold Return    : {buyhold_return:.2f}%")
+
+print(f"CAGR                 : {cagr:.2f}%")
+print(f"Volatility           : {volatility:.2f}%")
+print(f"Sharpe Ratio         : {sharpe:.2f}")
+print(f"Maximum Drawdown     : {max_drawdown:.2f}%")
+
+print("-" * 60)
+
+print(f"Buy Signals          : {buy_signals}")
+print(f"Sell Signals         : {sell_signals}")
+
+print("=" * 60)
+
+# =====================================================
+# PLOT
+# =====================================================
+
+plt.figure(figsize=(14,7))
+
+plt.plot(
+    df["Date"],
+    df["Strategy Equity"],
+    label="Strategy",
+    linewidth=2
+)
+
+plt.plot(
+    df["Date"],
+    df["BuyHold Equity"],
+    label="Buy & Hold",
+    linewidth=2
+)
+
+plt.title("Trend Filter + MACD + ATR Stop Loss")
+
+plt.xlabel("Date")
+
+plt.ylabel("Portfolio Value (₹)")
+
+plt.grid(True)
+
+plt.legend()
+
+plt.show()
